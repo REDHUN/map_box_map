@@ -29,6 +29,8 @@ class _NavigationScreenState extends State<NavigationScreen>
   PointAnnotationManager? pointAnnotationManager;
   PolylineAnnotationManager? polylineAnnotationManager;
   PointAnnotation? locationPuck;
+  Object? _lastRenderedRouteToken;
+  bool _isDrawingRoute = false;
 
   // Continuous smoothing for perfectly fluid puck and camera movement
   late Ticker _ticker;
@@ -97,6 +99,8 @@ class _NavigationScreenState extends State<NavigationScreen>
 
   void _onMapCreated(MapboxMap mapboxMap) async {
     this.mapboxMap = mapboxMap;
+    _lastRenderedRouteToken = null;
+    _isDrawingRoute = false;
     // Load 3D terrain/puck if needed via mapboxMap.style
 
     // Initialize annotation managers
@@ -182,7 +186,7 @@ class _NavigationScreenState extends State<NavigationScreen>
           }
 
           _updateMapboxCamera(viewModel);
-          _drawRoute(viewModel);
+          _drawRouteIfNeeded(viewModel);
 
           return Stack(
             children: [
@@ -284,37 +288,52 @@ class _NavigationScreenState extends State<NavigationScreen>
     }
   }
 
-  void _drawRoute(NavigationViewModel viewModel) async {
-    if (polylineAnnotationManager == null || viewModel.currentRoute == null)
+  void _drawRouteIfNeeded(NavigationViewModel viewModel) async {
+    if (polylineAnnotationManager == null || viewModel.currentRoute == null) {
+      _lastRenderedRouteToken = null;
       return;
+    }
 
-    await polylineAnnotationManager!.deleteAll();
+    final route = viewModel.currentRoute!;
+    final currentRouteToken = route;
+    if (identical(_lastRenderedRouteToken, currentRouteToken) ||
+        _isDrawingRoute) {
+      return;
+    }
 
-    final lineCoordinates = viewModel.currentRoute!.routePoints
-        .map((p) => Position(p.longitude, p.latitude))
-        .toList();
+    _isDrawingRoute = true;
+    try {
+      await polylineAnnotationManager!.deleteAll();
 
-    // Background Polyline (Casing)
-    var casingOptions = PolylineAnnotationOptions(
-      geometry: LineString(coordinates: lineCoordinates),
-      lineColor: const Color(0xFF2E65E2).value, // Darker blue outline
-      lineWidth: 10.0,
-      lineOpacity: 1.0,
-      lineJoin: LineJoin.ROUND,
-    );
+      final lineCoordinates = route.routePoints
+          .map((p) => Position(p.longitude, p.latitude))
+          .toList();
 
-    // Foreground Polyline (Inner Line)
-    var innerOptions = PolylineAnnotationOptions(
-      geometry: LineString(coordinates: lineCoordinates),
-      lineColor: const Color(0xFF4C8CFF).value, // Google Maps style light blue
-      lineWidth: 6.0,
-      lineOpacity: 1.0,
-      lineJoin: LineJoin.ROUND,
-    );
+      // Background Polyline (Casing)
+      var casingOptions = PolylineAnnotationOptions(
+        geometry: LineString(coordinates: lineCoordinates),
+        lineColor: const Color(0xFF2E65E2).value, // Darker blue outline
+        lineWidth: 10.0,
+        lineOpacity: 1.0,
+        lineJoin: LineJoin.ROUND,
+      );
 
-    // Create casing first so it's behind the inner line
-    await polylineAnnotationManager!.create(casingOptions);
-    await polylineAnnotationManager!.create(innerOptions);
+      // Foreground Polyline (Inner Line)
+      var innerOptions = PolylineAnnotationOptions(
+        geometry: LineString(coordinates: lineCoordinates),
+        lineColor: const Color(0xFF4C8CFF).value, // Google Maps style light blue
+        lineWidth: 6.0,
+        lineOpacity: 1.0,
+        lineJoin: LineJoin.ROUND,
+      );
+
+      // Create casing first so it's behind the inner line
+      await polylineAnnotationManager!.create(casingOptions);
+      await polylineAnnotationManager!.create(innerOptions);
+      _lastRenderedRouteToken = currentRouteToken;
+    } finally {
+      _isDrawingRoute = false;
+    }
   }
 
   Widget _buildTopInstructionCard(NavigationViewModel viewModel) {
