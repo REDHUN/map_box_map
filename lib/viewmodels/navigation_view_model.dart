@@ -52,6 +52,7 @@ class NavigationViewModel extends ChangeNotifier {
   StreamSubscription? _engineProgressSub;
 
   LatLng? _destination;
+  LatLng? _previousLocation;
 
   NavigationViewModel({
     required MapboxRepository mapboxRepository,
@@ -121,12 +122,22 @@ class NavigationViewModel extends ChangeNotifier {
     _locationSubscription = _locationService.locationStream.listen((
       Position position,
     ) {
+      final newLocation = LatLng(position.latitude, position.longitude);
+
       // Calculate heading manually if raw heading is unreliable, but position.heading is usually OK
       if (_currentLocation != null && position.speed > 1.0) {
-        _currentHeading = position.heading;
+        if (position.heading.isFinite && position.heading >= 0) {
+          _currentHeading = position.heading;
+        } else if (_previousLocation != null) {
+          _currentHeading = GeoUtils.calculateBearing(
+            _previousLocation!,
+            newLocation,
+          );
+        }
       }
 
-      _currentLocation = LatLng(position.latitude, position.longitude);
+      _previousLocation = _currentLocation;
+      _currentLocation = newLocation;
       _currentSpeed = position.speed; // meters per second
 
       // Feed location into engine
@@ -140,14 +151,6 @@ class NavigationViewModel extends ChangeNotifier {
       LatLng snapped,
     ) {
       _snappedLocation = snapped;
-
-      // We can also compute exact distance to next step
-      if (_currentInstruction != null && _currentLocation != null) {
-        _distanceRemaining = GeoUtils.calculateDistanceInMeters(
-          snapped,
-          _currentInstruction!.location,
-        );
-      }
 
       notifyListeners();
     });
@@ -173,9 +176,11 @@ class NavigationViewModel extends ChangeNotifier {
 
     // 5. Listen to Progress updates
     _engineProgressSub = _navigationEngine.progressStream.listen((
-      double progress,
+      NavigationProgress progress,
     ) {
-      // Example: We could use progress to update a progress bar.
+      _distanceRemaining = progress.distanceRemainingMeters;
+      _durationRemaining = progress.durationRemainingSeconds;
+      notifyListeners();
     });
   }
 
@@ -185,6 +190,7 @@ class NavigationViewModel extends ChangeNotifier {
     _currentInstruction = null;
     _distanceRemaining = 0.0;
     _durationRemaining = 0.0;
+    _previousLocation = null;
 
     _clearStreams();
     _locationService.stopLocationStream();

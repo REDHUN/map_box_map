@@ -29,6 +29,7 @@ class _NavigationScreenState extends State<NavigationScreen>
   PointAnnotationManager? pointAnnotationManager;
   PolylineAnnotationManager? polylineAnnotationManager;
   PointAnnotation? locationPuck;
+  int? _lastRenderedRouteHash;
 
   // Continuous smoothing for perfectly fluid puck and camera movement
   late Ticker _ticker;
@@ -182,7 +183,7 @@ class _NavigationScreenState extends State<NavigationScreen>
           }
 
           _updateMapboxCamera(viewModel);
-          _drawRoute(viewModel);
+          _drawRouteIfNeeded(viewModel);
 
           return Stack(
             children: [
@@ -284,13 +285,17 @@ class _NavigationScreenState extends State<NavigationScreen>
     }
   }
 
-  void _drawRoute(NavigationViewModel viewModel) async {
+  void _drawRouteIfNeeded(NavigationViewModel viewModel) async {
     if (polylineAnnotationManager == null || viewModel.currentRoute == null)
       return;
 
+    final route = viewModel.currentRoute!;
+    final currentRouteHash = Object.hash(route.distance, route.duration);
+    if (_lastRenderedRouteHash == currentRouteHash) return;
+
     await polylineAnnotationManager!.deleteAll();
 
-    final lineCoordinates = viewModel.currentRoute!.routePoints
+    final lineCoordinates = route.routePoints
         .map((p) => Position(p.longitude, p.latitude))
         .toList();
 
@@ -315,6 +320,7 @@ class _NavigationScreenState extends State<NavigationScreen>
     // Create casing first so it's behind the inner line
     await polylineAnnotationManager!.create(casingOptions);
     await polylineAnnotationManager!.create(innerOptions);
+    _lastRenderedRouteHash = currentRouteHash;
   }
 
   Widget _buildTopInstructionCard(NavigationViewModel viewModel) {
