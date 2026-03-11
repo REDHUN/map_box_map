@@ -30,27 +30,30 @@ class NavigationRoute {
     final stepsList = <NavigationStep>[];
     final legs = json['legs'] as List<dynamic>? ?? [];
 
-    // As we process steps, Mapbox paths correlate. The Mapbox APIs
-    // step `geometry` also has arrays. To simplify, we keep track using standard offsets
-    // if `geometry_index` is missing. Mapbox API usually provides step geometry.
-    int currentIndex = 0;
+    // We use the route geometry itself as the source of truth.
+    // For each step, find the nearest point on the full route *ahead of the
+    // last matched point*. This gives significantly more stable and accurate
+    // step indexing than relying purely on decoded step geometry lengths.
+    int lastMatchedIndex = 0;
 
     for (var leg in legs) {
       final legSteps = leg['steps'] as List<dynamic>? ?? [];
       for (var stepJson in legSteps) {
-        // Decoding step geometry temporarily just to count the points
-        // so we can set the geometry index for the next step.
-        final stepGeometryStr = stepJson['geometry'] as String? ?? '';
-        final stepPts = PolylineDecoder.decodePolyline(
-          stepGeometryStr,
-          precision: 6,
+        final maneuver = stepJson['maneuver'] as Map<String, dynamic>? ?? {};
+        final locationRaw = maneuver['location'] as List<dynamic>? ?? [0.0, 0.0];
+        final stepLocation = LatLng(
+          (locationRaw[1] as num).toDouble(),
+          (locationRaw[0] as num).toDouble(),
         );
 
-        stepsList.add(NavigationStep.fromJson(stepJson, currentIndex));
+        final geometryIndex = _findNearestRouteIndex(
+          routePoints: points,
+          target: stepLocation,
+          startIndex: lastMatchedIndex,
+        );
 
-        // Advance current index (Mapbox step segments share the end-start point,
-        // so we often do math.max(0, stepPts.length - 1))
-        currentIndex += (stepPts.isNotEmpty ? stepPts.length - 1 : 0);
+        stepsList.add(NavigationStep.fromJson(stepJson, geometryIndex));
+        lastMatchedIndex = geometryIndex;
       }
     }
 
@@ -60,5 +63,31 @@ class NavigationRoute {
       routePoints: points,
       steps: stepsList,
     );
+  }
+
+  static int _findNearestRouteIndex({
+    required List<LatLng> routePoints,
+    required LatLng target,
+    required int startIndex,
+  }) {
+    if (routePoints.isEmpty) return 0;
+
+    int bestIndex = startIndex.clamp(0, routePoints.length - 1);
+    double bestDistance = double.infinity;
+
+    for (int i = bestIndex; i < routePoints.length; i++) {
+      final d = GeoUtils.calculateDistanceInMeters(routePoints[i], target);
+      if (d < bestDistance) {
+        bestDistance = d;
+        bestIndex = i;
+      }
+
+      // Early-stop once distance starts growing after a very close match.
+      if (bestDistance < 5.0 && d > bestDistance * 1.5) {
+        break;
+      }
+    }
+
+    return bestIndex;
   }
 }

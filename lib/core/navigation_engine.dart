@@ -6,6 +6,19 @@ import '../models/navigation_route_model.dart';
 import '../models/navigation_step_model.dart';
 import '../utils/geo_utils.dart';
 
+
+class NavigationProgress {
+  final double progressFraction;
+  final double distanceRemainingMeters;
+  final double durationRemainingSeconds;
+
+  const NavigationProgress({
+    required this.progressFraction,
+    required this.distanceRemainingMeters,
+    required this.durationRemainingSeconds,
+  });
+}
+
 class NavigationEngine {
   final FlutterTts _flutterTts = FlutterTts();
 
@@ -25,12 +38,12 @@ class NavigationEngine {
   final _snappedLocationController = StreamController<LatLng>.broadcast();
   final _instructionController = StreamController<NavigationStep>.broadcast();
   final _rerouteEventController = StreamController<LatLng>.broadcast();
-  final _progressController = StreamController<double>.broadcast();
+  final _progressController = StreamController<NavigationProgress>.broadcast();
 
   Stream<LatLng> get snappedLocationStream => _snappedLocationController.stream;
   Stream<NavigationStep> get instructionStream => _instructionController.stream;
   Stream<LatLng> get rerouteEventStream => _rerouteEventController.stream;
-  Stream<double> get progressStream => _progressController.stream;
+  Stream<NavigationProgress> get progressStream => _progressController.stream;
 
   NavigationEngine() {
     _initTts();
@@ -70,7 +83,12 @@ class NavigationEngine {
     // To optimize, we don't snap against the whole route every time,
     // only a window ahead of our current progress index.
     final searchWindowStart = _routeProgressIndex;
-    final searchWindowEnd = (searchWindowStart + 50).clamp(
+    final dynamicWindow = speedInMetersPerSecond > 20
+        ? 140
+        : speedInMetersPerSecond > 10
+        ? 90
+        : 60;
+    final searchWindowEnd = (searchWindowStart + dynamicWindow).clamp(
       0,
       route.routePoints.length,
     );
@@ -104,11 +122,37 @@ class NavigationEngine {
 
     // 4. Progress calculation (0.0 to 1.0)
     final progress = _routeProgressIndex / (route.routePoints.length - 1);
-    _progressController.add(progress.clamp(0.0, 1.0));
+    final progressFraction = progress.clamp(0.0, 1.0);
+
+    final remainingDistance = _calculateRemainingDistance(route, _routeProgressIndex);
+    final remainingDuration = route.duration * (1.0 - progressFraction);
+
+    _progressController.add(
+      NavigationProgress(
+        progressFraction: progressFraction,
+        distanceRemainingMeters: remainingDistance,
+        durationRemainingSeconds: remainingDuration.clamp(0.0, route.duration),
+      ),
+    );
 
     // 5. Step Detection & Instruction Timing
     _checkStepProgress(snappedLocation, speedInMetersPerSecond);
   }
+
+  double _calculateRemainingDistance(NavigationRoute route, int fromIndex) {
+    if (route.routePoints.length < 2) return 0.0;
+    if (fromIndex >= route.routePoints.length - 1) return 0.0;
+
+    double total = 0.0;
+    for (int i = fromIndex; i < route.routePoints.length - 1; i++) {
+      total += GeoUtils.calculateDistanceInMeters(
+        route.routePoints[i],
+        route.routePoints[i + 1],
+      );
+    }
+    return total;
+  }
+
 
   void _checkStepProgress(LatLng currentLocation, double speed) {
     if (_currentRoute == null ||
